@@ -58,7 +58,7 @@ class TestFile:
     def test_roundtrip(self):
         m = mht.generate_mht(os.urandom(30_000), "data.txt.aes", KEY)
         text = mht.serialize(m)
-        assert text.startswith(b"RING-CRYPTER-MHT v1\n")
+        assert text.startswith(b"RING-CRYPTER-MHT v2\n")
         assert f"root: {m.root}\n".encode() in text
         back = mht.parse(text)
         assert back == m
@@ -69,7 +69,7 @@ class TestFile:
             mht.serialize(mht.generate_mht(data, "a", KEY))
 
     @pytest.mark.parametrize("mutate", [
-        lambda t: t.replace(b"RING-CRYPTER-MHT v1", b"OTHER"),
+        lambda t: t.replace(b"RING-CRYPTER-MHT v2", b"OTHER"),
         lambda t: t[:-1],                                          # no trailing newline
         lambda t: t.replace(b"block-count: 8", b"block-count: 9"),
         lambda t: t.replace(b"\nL0 3 ", b"\nL0 4 "),               # node out of order
@@ -107,3 +107,30 @@ class TestCompare:
         a = mht.generate_mht(data, "f", KEY)
         c = mht.compare(a, mht.generate_mht(data[:4096 * 3], "f", KEY, block_size=4096))
         assert not c.match and c.size_changed and c.tampered_blocks == [3, 4]
+
+
+class TestVersionFields:
+    PREV = "ab" * 32
+
+    def test_version_roundtrip(self):
+        m = mht.generate_mht(os.urandom(9000), "f.aes", KEY, version=3, previous_mht_sha256=self.PREV)
+        text = mht.serialize(m)
+        assert b"version: 3\n" in text and f"previous-mht-sha256: {self.PREV}\n".encode() in text
+        back = mht.parse(text)
+        assert back.version == 3 and back.previous_mht_sha256 == self.PREV
+
+    def test_first_version_has_no_predecessor(self):
+        text = mht.serialize(mht.generate_mht(os.urandom(100), "f", KEY))
+        assert b"version: 1\nprevious-mht-sha256: none\n" in text
+        with pytest.raises(mht.MHTFormatError):
+            mht.parse(text.replace(b"previous-mht-sha256: none", f"previous-mht-sha256: {self.PREV}".encode()))
+        m2 = mht.serialize(mht.generate_mht(os.urandom(100), "f", KEY, version=2, previous_mht_sha256=self.PREV))
+        with pytest.raises(mht.MHTFormatError):
+            mht.parse(m2.replace(f"previous-mht-sha256: {self.PREV}".encode(), b"previous-mht-sha256: none"))
+
+    def test_v1_files_still_parse(self):
+        m = mht.generate_mht(os.urandom(9000), "f.aes", KEY)
+        v1 = (mht.serialize(m).replace(b"RING-CRYPTER-MHT v2", b"RING-CRYPTER-MHT v1")
+              .replace(b"version: 1\nprevious-mht-sha256: none\n", b""))
+        back = mht.parse(v1)
+        assert back.version == 1 and back.levels == m.levels

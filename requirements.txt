@@ -4,7 +4,8 @@ pytest>=8.0.0
 # Ring Crypter / paper implementation
 cryptography>=42.0      # AES-256-GCM, RSA-PSS, scrypt
 numpy>=1.26             # Ring-LWE polynomial arithmetic
-dropbox>=12.0           # official Dropbox Python SDK
+supabase>=2.10          # official Supabase Python SDK (default cloud storage)
+dropbox>=12.0           # official Dropbox Python SDK (optional alternative backend)
 matplotlib>=3.8         # performance graphs
 # optional (used only by tests to validate generated sample files):
 # pillow, pypdf

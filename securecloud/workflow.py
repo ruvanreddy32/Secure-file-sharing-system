@@ -18,6 +18,14 @@ Receiver (Integrity Verification, then decryption)::
          (+ encrypted-key-file hash and file-name binding, extensions)
     only if everything matches: Ring-LWE-decrypt K, AES-decrypt the file
 
+Authorized dynamic update (:func:`update_phase`)::
+
+    the owner verifies the current version N with its own public key, then runs
+    the Setup phase on the new content with version = N+1 and
+    previous-mht-sha256 = SHA-256(signed MHT file of version N), signed with the
+    same owner key.  Receivers check the version number and the chain link, so
+    versions that are forged, re-ordered or signed by anyone else fail.
+
 Decryption is reachable only through :func:`decrypt_verified` /
 :func:`open_bundle`, which refuse to run unless a successful
 :class:`VerificationReport` for *exactly these bytes* is supplied.
@@ -74,6 +82,10 @@ class VerificationReport:
     mht_match: bool = False
     key_file_match: bool = False
     size_changed: bool = False
+    version: int = 0
+    previous_mht_sha256: str = ""
+    version_ok: bool = True
+    manifest_valid: Optional[bool] = None   # set by versioning.VersionedRepository
     stored_root: str = ""
     computed_root: str = ""
     block_count: int = 0
@@ -107,7 +119,8 @@ def _ms(t0: float) -> float:
 # ---------------------------------------------------------------------------
 
 def setup_phase(plaintext: bytes, name: str, signing_key, recipient_rlwe_public: rlwe.RLWEPublicKey,
-                *, block_size: Optional[int] = None, paper_mode: bool = False
+                *, block_size: Optional[int] = None, paper_mode: bool = False,
+                version: int = 1, previous_mht_sha256: str = ""
                 ) -> Tuple[ProtectedBundle, Dict[str, float]]:
     """Encrypt, encrypt the key, build and sign the MHT.  Returns (bundle, timings in ms)."""
     if not name or "/" in name or "\\" in name:
@@ -125,7 +138,8 @@ def setup_phase(plaintext: bytes, name: str, signing_key, recipient_rlwe_public:
     t["rlwe_key_encrypt_ms"] = _ms(t0)
 
     data = mht.generate_mht(encrypted, name + ENC_SUFFIX, encrypted_key,
-                            block_size=block_size, paper_mode=paper_mode, timings=t)
+                            block_size=block_size, paper_mode=paper_mode, timings=t,
+                            version=version, previous_mht_sha256=previous_mht_sha256)
     t0 = time.perf_counter()
     mht_bytes = mht.serialize(data)
     t["mht_file_write_ms"] = _ms(t0)
@@ -138,11 +152,39 @@ def setup_phase(plaintext: bytes, name: str, signing_key, recipient_rlwe_public:
     return ProtectedBundle(name, encrypted, encrypted_key, signed), t
 
 
+def signed_mht_sha256(bundle: ProtectedBundle) -> str:
+    return hashlib.sha256(bundle.signed_mht).hexdigest()
+
+
+def update_phase(new_plaintext: bytes, previous: ProtectedBundle, signing_key,
+                 recipient_rlwe_public: rlwe.RLWEPublicKey, *, block_size: Optional[int] = None,
+                 paper_mode: bool = False) -> Tuple[ProtectedBundle, Dict[str, float]]:
+    """Authorized dynamic update: create version N+1 of *previous* (paper §VII future work).
+
+    The owner first verifies the current version under its own public key (so it
+    never extends a tampered or foreign chain), then re-runs the paper's Setup
+    phase on the new content.  The cryptographic algorithms are unchanged; the
+    new signed MHT carries version = N+1 and SHA-256 of version N's signed MHT.
+
+    Raises:
+        IntegrityError: the previous version does not verify under the owner's key.
+    """
+    report = verify_integrity(previous, signing_key.public_key())
+    if not report.ok:
+        raise IntegrityError("Update refused: the current version does not verify under the "
+                             "owner's key. " + report.summary, report)
+    return setup_phase(new_plaintext, previous.name, signing_key, recipient_rlwe_public,
+                       block_size=block_size, paper_mode=paper_mode,
+                       version=report.version + 1, previous_mht_sha256=signed_mht_sha256(previous))
+
+
 # ---------------------------------------------------------------------------
 # Receiver side: Integrity verification
 # ---------------------------------------------------------------------------
 
-def verify_integrity(bundle: ProtectedBundle, signer_public_key) -> VerificationReport:
+def verify_integrity(bundle: ProtectedBundle, signer_public_key, *,
+                     expected_version: Optional[int] = None,
+                     expected_previous_mht_sha256: Optional[str] = None) -> VerificationReport:
     """Paper §V-C Integrity Verification steps (1) and (2).  Never raises on tampering."""
     r = VerificationReport()
     t = r.timings_ms
@@ -170,6 +212,15 @@ def verify_integrity(bundle: ProtectedBundle, signer_public_key) -> Verification
         return r
     t["mht_parse_ms"] = _ms(t0)
     r.stored_root, r.block_count, r.block_size = stored.root, stored.block_count, stored.block_size
+    r.version, r.previous_mht_sha256 = stored.version, stored.previous_mht_sha256
+    if expected_version is not None and stored.version != expected_version:
+        r.version_ok = False
+        r.messages.append(f"Signed MHT is version {stored.version}, expected version {expected_version}")
+    if (expected_previous_mht_sha256 is not None
+            and stored.previous_mht_sha256 != expected_previous_mht_sha256):
+        r.version_ok = False
+        r.messages.append("Version chain broken: previous-mht-sha256 does not match the "
+                          "preceding version")
 
     r.file_name_match = stored.file_name == bundle.encrypted_name
     if not r.file_name_match:
@@ -202,7 +253,7 @@ def verify_integrity(bundle: ProtectedBundle, signer_public_key) -> Verification
         r.messages.append("Encrypted key file does not match the signed MHT metadata")
 
     r.ok = r.signature_valid and r.mht_well_formed and r.file_name_match \
-        and r.mht_match and r.key_file_match
+        and r.mht_match and r.key_file_match and r.version_ok
     if r.ok:
         r.verified_digest = _digest(bundle)
     t["total_verify_ms"] = _ms(t_all)
@@ -224,6 +275,9 @@ def decrypt_verified(bundle: ProtectedBundle, report: VerificationReport,
                      rlwe_private_key: rlwe.RLWEPrivateKey,
                      timings: Optional[Dict[str, float]] = None) -> bytes:
     """Recover K with Ring-LWE and AES-decrypt — refused unless *report* verified these bytes."""
+    from . import blockmode   # lazy: blockmode imports this module
+    if isinstance(bundle, blockmode.BlockBundle):
+        return blockmode.block_decrypt_verified(bundle, report, rlwe_private_key, timings)
     if not isinstance(report, VerificationReport) or not report.ok:
         raise IntegrityError("Decryption refused: integrity verification did not succeed. "
                              + (report.summary if isinstance(report, VerificationReport) else ""),

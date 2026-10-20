@@ -1,0 +1,15 @@
+{
+  "timestamp_utc": "2026-10-20T14:45:40+00:00",
+  "python": "3.14.4",
+  "implementation": "CPython",
+  "os": "Windows 11 (10.0.26200)",
+  "machine": "AMD64",
+  "processor": "Intel64 Family 6 Model 151 Stepping 2, GenuineIntel",
+  "cpu_count": "12",
+  "cryptography": "50.0.2",
+  "numpy": "2.4.4",
+  "dropbox_sdk": "12.2.3",
+  "backend": "supabase",
+  "reps": "3",
+  "sizes": "65536,262144,1048576"
+}

@@ -1,113 +1,150 @@
 # Test Results
 
 **Command:** `python -m pytest -v -rs`
-**Date:** 2026-10-20 · **Platform:** Windows 11, CPython 3.14.4, pytest 9.1.1
+**Date:** 2026-10-20 · **Platform:** Windows 11, CPython 3.14.4, pytest 9.1.1, supabase 2.33.0
 **Full log:** `evaluation/results/pytest_output.txt`
 
 ```
-collected 209 items
+collected 329 items
 ...
 SKIPPED [1] tests\test_dropbox_live.py:23: Dropbox credentials not configured
-======================= 208 passed, 1 skipped in 6.45s ========================
+SKIPPED [1] tests\test_supabase_live.py:64: Supabase credentials not configured
+SKIPPED [1] tests\test_supabase_live.py:74: Supabase credentials not configured
+======================= 326 passed, 3 skipped in 17.73s =======================
 ```
 
 | Result | Count |
 |---|---:|
-| Passed | **208** |
+| Passed | **326** |
 | Failed | **0** |
-| Skipped | **1**: the live Dropbox test (no credentials available, see below) |
+| Skipped | **3**: the live cloud tests (2 Supabase, 1 Dropbox); no credentials in this environment |
 
-Baseline before any change: the original repository's 67 tests passed (`67 passed in 0.26s`). They
-all still pass, unmodified.
+## 0. What was verified where (read this first)
+
+| Feature | Tested locally (mocked / offline) | Verified against the real Supabase service |
+|---|---|---|
+| AES-256-GCM, Ring-LWE, SHA-256, MHT, RSA-PSS | ✅ real implementations, no mocks | n/a (no cloud involved) |
+| Supabase upload / download / list / delete | ✅ mocked client (`tests/fakes.py`) | ❌ **not run**: no credentials |
+| Supabase upload confirmation (read-back SHA-256) | ✅ mocked, incl. corrupted-upload rejection | ❌ not run |
+| Private-bucket enforcement / creation | ✅ mocked | ❌ not run |
+| Credentials from environment, service-role preference | ✅ `create_client` patched; no secret rendered by the UI | ❌ not run |
+| Real SDK API compatibility | ✅ real `supabase.create_client(...)` built offline; all called methods exist with compatible parameters; network error maps to `StorageError` | ❌ no request reached Supabase |
+| Versioning, atomic activation, partial-upload safety | ✅ on mocked Supabase, mocked Dropbox, and the real local filesystem | ❌ not run |
+| Authorized dynamic updates, unauthorized-update rejection | ✅ same three backends | ❌ not run |
+| Tamper detection after download | ✅ same three backends | ❌ not run |
+| CLI with Supabase backend | ✅ mocked client | ❌ not run |
+| Streamlit page with Supabase backend | ✅ `AppTest`, mocked client | ❌ not run |
+| Dropbox (optional backend) | ✅ mocked client | ❌ not run against real Dropbox |
+
+**Update:** the live Supabase tests were later run against a real project and passed (§0b). In the
+table above, ❌ marks what the *default* run (no credentials) does not cover. §0b lists what was
+verified live.
+
+## 0b. Live verification against the real Supabase service (2026-10-20)
+
+Project `mzrfdupvythavlxbzfsn` (Free plan), private bucket `secure-files`, key type `sb_secret_…`
+(the key value appears in no file).
+
+| Check | Command | Result |
+|---|---|---|
+| Bucket exists and is private | `python -m securecloud supabase-setup --no-create` | `bucket 'secure-files' exists and is private` |
+| Raw upload (with read-back confirmation), download, list, delete | `pytest -m supabase_live` → `test_live_raw_object_operations` | **PASSED** |
+| Publish v1 → verify → decrypt; authorized update v2 → verify/decrypt v2 and v1; interrupted v3 upload not activated; update with another RSA key refused; server-side tampering detected (block 1) and decryption refused; owner deletes everything | `pytest -m supabase_live` → `test_live_publish_verify_update_tamper` | **PASSED** (2 passed in 41.26 s) |
+| End-to-end demo | `python -m securecloud demo --backend supabase` | **DEMO PASSED**: v1 verified and identical; v2 active; interrupted v3 "NOT activated"; 1-byte tamper → "modified block(s): 1", decryption refused; 7 objects cleaned up |
+| No leftovers | list bucket afterwards | 0 objects |
+
+Notes: the two `DeprecationWarning`s during the live run come from inside the `supabase` SDK
+(`supabase/_sync/client.py`), not from this code. Not exercised live: the Streamlit page on Supabase
+(tested only with the mocked client), the paper benchmark with `--cloud supabase`, and uploads near
+the 50 MB Free-plan limit.
 
 ## 1. Tests per file
 
 | File | Tests | Covers |
 |---|---:|---|
 | `test_chunker.py` *(original)* | 11 | block splitting |
-| `test_tree.py` *(original 22 + 7 new)* | 29 | MHT build; **new:** `from_leaf_hashes` / `level_hashes` rebuild equality |
+| `test_tree.py` *(original 22 + 7)* | 29 | MHT build; `from_leaf_hashes` / `level_hashes` |
 | `test_proof.py` *(original)* | 12 | Merkle proofs |
 | `test_tamper.py` *(original)* | 10 | tamper localization |
 | `test_updater.py` *(original)* | 12 | O(log n) updates |
 | `test_crypto_primitives.py` | 36 | AES-256-GCM, Ring-LWE, RSA-PSS |
-| `test_mht_file.py` | 16 | MHT of ciphertext, MHT text file, comparison |
+| `test_mht_file.py` | 19 | MHT of ciphertext, MHT text file (v2 version fields, v1 compatibility), comparison |
 | `test_workflow.py` | 31 | functional and tampering, end to end |
 | `test_filetypes_boundaries.py` | 28 | 7 file types, boundary sizes, 20 MiB file |
-| `test_storage.py` | 16 | local folder, Dropbox code path (fake client), content hash, missing-folder listing |
-| `test_cli.py` | 5 | CLI keygen/encrypt/verify/decrypt/upload/tamper/demo |
-| `test_streamlit_page.py` | 2 | Streamlit page via `AppTest`: verify → decrypt; tampered file disables Decrypt |
-| `test_dropbox_live.py` | 1 | **real** Dropbox round trip + tamper (SKIPPED) |
+| `test_storage.py` | 19 | local folder and Dropbox code path: nested keys, recursive list, delete, path safety, content hash |
+| **`test_supabase_storage.py`** | **24** | **Supabase backend (mocked client)**: upload/download, read-back confirmation, corrupted upload, upsert, errors, recursive listing + paging, batched delete, private-bucket check/creation, env credentials, `open_storage` |
+| **`test_versioning.py`** | **80** | 26 cases × **3 backends** (mocked Supabase, mocked Dropbox, local) + 2 backend-independent: publish, dynamic update chain, partial uploads, manifest-write failure, concurrent publisher, storage attacks, delete/cleanup |
+| `test_cli.py` | 8 | CLI incl. **full Supabase lifecycle** (setup → upload → decrypt → update → versions → tamper → refused update → delete), rollback + cleanup, missing-credential message |
+| `test_streamlit_page.py` | 7 | Streamlit `AppTest`: verify/decrypt, version picker, tamper, attacker tab (unauthorized update, interrupted upload, byte flip), **Supabase backend** + secret never rendered |
+| **`test_supabase_live.py`** | 2 | **REAL Supabase** (SKIPPED): raw object ops; publish/update/interrupted upload/unauthorized update/tamper/delete |
+| `test_dropbox_live.py` | 1 | real Dropbox (SKIPPED) |
 
-## 2. Requirement → test evidence
+The original repository's 67 tests all still pass, unmodified.
 
-### Functional tests (all PASSED)
+## 2. Requirement → test evidence (all PASSED locally)
+
+### Supabase storage (mocked client)
 | Requirement | Test(s) |
 |---|---|
-| Encryption and decryption | `TestAES::test_roundtrip[0,1,15,16,17,4096,100000]`, `test_unmodified_file_verifies_and_decrypts` |
-| Correct Merkle-tree generation | `test_paper_figure1_rule_8_leaves` (hand-computed H(1,8) per Fig. 1), `test_matches_repository_merkle_tree`, `test_paper_mode_gives_3_node_tree`, `test_mht_is_over_ciphertext_not_plaintext` |
-| RSA signature generation and verification | `TestRSASignature::*`, `test_signed_mht_roundtrip`, `test_key_size` (3072) |
-| Ring-LWE key encryption | `test_key_roundtrip[P1-2]`, `[P2-1]`, `test_public_key_relation`, `test_poly_mul_matches_schoolbook`, `test_x_to_the_n_is_minus_one`, `test_gaussian_sampler_statistics[P1,P2]`, `test_parameters_match_de_clercq_2015` |
-| Upload/download workflow | `test_upload_download_roundtrip_local_folder`, `test_full_workflow_through_dropbox_code_path` (fake SDK client), `test_upload_and_decrypt_via_local_backend` (CLI) |
-| Integrity verification of unchanged files | `test_unmodified_file_verifies_and_decrypts`, `test_verify_and_decrypt` (Streamlit) |
-| Restoration of original contents | every round-trip test asserts `out == original` byte for byte |
-| Upload confirmation | `test_upload_confirmation_failure_raises`, `test_large_upload_uses_session` |
+| Encrypted uploads, downloads, listing, deletion | `test_upload_download`, `test_recursive_listing_of_folders`, `test_pagination`, `test_delete_in_batches`, `test_large_object_roundtrip` |
+| Upload success checked | `test_upload_is_read_back_and_compared`, `test_corrupted_upload_is_rejected`, `test_upload_error_wrapped` |
+| Private bucket | `test_ensure_bucket_creates_private_bucket`, `test_public_bucket_is_refused` |
+| Credentials only from env; service role preferred | `test_client_built_from_env_with_service_role_preferred`, `test_missing_credentials`, CLI `test_supabase_missing_credentials_message` |
+| Service-role key not exposed in frontend | `test_page_on_supabase_backend` (secret value absent from all rendered captions, markdown and inputs) |
+| Key file and signed MHT stored alongside the ciphertext, in a private bucket | `test_first_version[supabase]` (exact object set: manifest + 3 objects in one version folder) |
 
-### Tampering tests (all PASSED). Each asserts: verification fails, **and** `open_bundle` and `decrypt_verified` both raise `IntegrityError`.
-| Attack | Test | Detected by |
-|---|---|---|
-| Modify one file block | `test_modify_one_block` → reports block `[3]` | MHT comparison |
-| Modify multiple blocks | `test_modify_multiple_blocks` → `[0, 2, 6]` | MHT comparison |
-| Modify last partial block | `test_single_bit_in_last_partial_block` | MHT comparison |
-| Delete part of a file (truncate) | `test_delete_part_of_file` | size + MHT |
-| Delete bytes in the middle | `test_delete_bytes_in_middle` | MHT |
-| Append data | `test_append_data` | size + MHT |
-| Empty downloaded file | `test_empty_downloaded_file` | size |
-| Replace file with random content | `test_replace_with_different_content_same_size` | MHT |
-| Replace file with another genuinely encrypted file of the same owner | `test_replace_with_other_validly_encrypted_file` | MHT and key-file hash |
-| Swap a whole signed bundle under another name | `test_swap_bundle_between_file_names` | signed file name |
-| Modify MHT metadata | `test_modify_mht_metadata` | RSA signature |
-| Recompute the MHT to match a tampered file | `test_attacker_rewrites_mht_to_match_tampered_file` | RSA signature |
-| Replace the signature (attacker key) | `test_replace_signature`, `test_attacker_signs_forged_mht_with_own_key` | RSA signature |
-| Remove / corrupt the signature | `test_signature_removed`, `test_corrupted_signature_bytes` | RSA signature |
-| Verify with an incorrect public key | `test_incorrect_public_key` | RSA signature |
-| Modify the encrypted key file | `test_modified_encrypted_key_file` | signed key-file hash |
-| Decrypt after failed verification | `test_decryption_blocked_after_failed_verification` (also with a forged `ok=True` flag), `test_report_of_other_bundle_cannot_unlock`, `test_decrypt_requires_a_report`, CLI `test_tamper_then_decrypt_refused` (exit code 2, no output file), Streamlit `test_tampered_file_blocks_decrypt` (Decrypt button disabled) | gate in `decrypt_verified` |
-| Wrong recipient | `test_wrong_recipient_cannot_decrypt` | Ring-LWE + AES-GCM tag |
-| Tampering in paper mode (3-node tree) | `test_paper_mode_detects_tampering` | MHT |
-| Tampering on the (fake) Dropbox server | `test_full_workflow_through_dropbox_code_path` | MHT |
+### Versioning and consistency (each × supabase / dropbox / local)
+| Requirement | Test(s) |
+|---|---|
+| Versioned storage | `test_update_creates_chained_versions` (v1, v2, v3 all retrievable and verified) |
+| Partial uploads never activate | `test_partial_upload_never_activates[.aes / .key.rlwe / .mht.signed]` |
+| Manifest write failure → old version stays active; cleanup; retry | `test_manifest_write_failure_leaves_old_version_active` |
+| Concurrent publisher does not corrupt the winner | `test_concurrent_publisher_detected` (this test found a real bug, fixed with per-attempt version folders) |
+| Stale or out-of-order version refused | `test_stale_update_refused`, `test_publish_requires_version_1_for_new_file`, `test_republishing_version_1_refused` |
 
-### File-type tests (all PASSED)
-Each of **Text (.txt), Audio (.wav), Video (.avi), Image (.png), Document (.docx), PDF (.pdf),
-Spreadsheet (.xlsx)** at ≈100 KB is: (a) validated as a genuine file of that type (WAV via `wave`,
-PNG via Pillow, PDF via pypdf, DOCX/XLSX ZIP + XML parse, AVI RIFF structure); (b) protected,
-verified, decrypted byte-identical, and re-validated; (c) tampered and rejected.
+### Authorized dynamic updates
+| Requirement | Test(s) |
+|---|---|
+| Owner update creates a signed hash chain | `test_update_creates_chained_versions`, `test_update_phase_chain_fields` |
+| Update refused if the current version is tampered | `test_update_refused_when_current_version_tampered`, `test_update_phase_refuses_tampered_previous` |
+| Update with another key refused | `test_unauthorized_update_by_other_key_is_refused` |
+| Forged version + forged manifest (attacker key) rejected by reader | `test_forged_version_with_forged_manifest` |
+| Unreferenced objects ignored | `test_unsigned_objects_without_manifest_change_are_ignored` |
+| Manifest edited without re-signing | `test_manifest_edited_without_resigning` |
+| Old version replayed as new | `test_old_version_files_replayed_as_new_version` |
+| Manifest rollback | `test_manifest_rollback_detected_with_min_version` (detected with `min_version`; without it the older genuine version is served, as documented) |
+| Delete keeps the chain verifiable; only the owner deletes | `test_delete_old_version_keeps_chain`, `test_cannot_delete_active_version`, `test_only_owner_can_delete`, `test_delete_whole_file` |
 
-### Boundary tests (all PASSED)
-Plaintext sizes **0** (empty), **1**, **4064/4065** (ciphertext exactly 4096 / 4097 B), **4096,
-4097, 12295** (uneven), exact multiple of the block size, custom block sizes **1, 64, 1000, 65536**,
-and a **20 MiB** file whose tampered block (index 3840) is localized exactly.
+### Paper workflow, tampering, file types, boundaries (unchanged from before; all PASSED)
+| Area | Tests |
+|---|---|
+| AES / Ring-LWE / RSA / MHT correctness | `test_crypto_primitives.py`, `test_mht_file.py` |
+| Tampering: modified blocks, truncation, append, replacement, MHT edits, replaced/removed signature, wrong public key, key-file swap, decryption after failed verification | `test_workflow.py::TestTampering` (23 tests) |
+| 7 file types (txt, wav, avi, png, docx, pdf, xlsx), validated before and after round trip | `test_filetypes_boundaries.py::TestFileTypes` |
+| Empty, 1-byte, uneven, exact-multiple, custom block sizes, 20 MiB | `test_filetypes_boundaries.py::TestBoundaries` |
 
 ## 3. Skipped / not executed
 
 | Test | Why | How to run |
 |---|---|---|
-| `test_dropbox_live.py::test_live_upload_verify_decrypt_and_tamper` | No Dropbox credentials in this environment. **Real Dropbox integration is therefore unverified.** | Set `DROPBOX_REFRESH_TOKEN` + `DROPBOX_APP_KEY` (+ `DROPBOX_APP_SECRET`) or `DROPBOX_ACCESS_TOKEN`, then `python -m pytest -m dropbox_live -v` |
+| `test_supabase_live.py` (2 tests) | skipped in the default run without credentials; **run separately with credentials and PASSED** (§0b) | `python -m pytest -m supabase_live -v` with `SUPABASE_URL` + `SUPABASE_SECRET_KEY` set (env or `.env`) |
+| `test_dropbox_live.py::test_live_upload_verify_decrypt_and_tamper` | no Dropbox credentials | `python -m pytest -m dropbox_live -v` |
 
 ## 4. Other executed checks
 
 | Check | Result |
 |---|---|
-| `python -m securecloud demo` (local folder) | verification PASSED, decrypted output identical; after flipping 1 byte: "Merkle root mismatch: 4 MHT node(s) differ; modified block(s): 3", decryption refused |
-| `streamlit run app.py` (headless, both pages) | server started, `/_stcore/health` → `ok` |
-| `python benchmark.py` (original) | completes after the UTF-8 stdout fix (previously crashed with `UnicodeEncodeError`) |
-| `python -m evaluation.paper_benchmark --runs 30` | completed; see `PERFORMANCE_RESULTS.md` |
-| `python -m evaluation.rlwe_failure_rate --trials 3000` | 0 bit errors with the implemented encoding (P1, P2) |
+| `python -m securecloud demo` (local folder) | v1 verified and decrypted; authorized update to v2; interrupted v3 "NOT activated", active version still 2; 1-byte tamper → "modified block(s): 1", decryption refused; cleanup removed 7 objects; **DEMO PASSED** |
+| Real Supabase SDK, offline construction | `create_client` → `storage.from_()` methods `upload(path, file, file_options)`, `download(path, …)`, `list(path, options)`, `remove(paths)`, `get_bucket(id)`, `create_bucket(id, name, options)`. All match our calls. |
+| `streamlit run app.py` (headless, both pages) | `/_stcore/health` → `ok`, no tracebacks |
 
 ## 5. Failing cases found during development (and fixed)
 
 | Issue | Fix |
 |---|---|
-| Original `benchmark.py` crashed on Windows consoles (`'charmap' codec can't encode '✓'`) | stdout reconfigured to UTF-8 in `__main__` |
-| Sample PDF generator overshot the 100 KB target by 3.4 % (page slicing ignored the line count) | slice pages to `min(i + 50, n)` |
-| Benchmark CSV re-plot parsed the mode label `"4096"` as an integer | `load_csv` keeps label columns as strings (`--plot-only`) |
-| Ring-LWE with 1 coefficient per bit measured 0.40 % / 1.59 % key-decryption failure (P1/P2) | 2-coefficient encoding (0 failures measured) |
+| **Concurrent publishers of the same version wrote into the same `v000002/` folder; the loser's rollback deleted the winner's active files** (found by `test_concurrent_publisher_detected`) | each publish attempt uses its own folder `v<N>-<first 16 hex of SHA-256(signed MHT)>` |
+| Local-folder delete left empty version directories | prune empty parent folders after delete |
+| Original `benchmark.py` crashed on Windows consoles (`UnicodeEncodeError`) | stdout reconfigured to UTF-8 |
+| Sample PDF generator overshot the 100 KB target by 3.4 % | page slicing fixed |
+| Benchmark CSV re-plot parsed the mode label `"4096"` as an integer | `load_csv` keeps label columns as strings |
+| Ring-LWE with 1 coefficient per bit: 0.40 % / 1.59 % key-decryption failure (P1/P2) | 2-coefficient encoding (0 failures measured) |

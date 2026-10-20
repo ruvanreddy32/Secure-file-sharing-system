@@ -93,3 +93,12 @@ does **not** implement the paper's system: there is no encryption (R1, R2), no p
 MHT metadata (R6–R9), no cloud storage (R10), no verification against a trusted signed reference
 (R11), no gated decryption (R12), and no reproduction of the paper's experiments (R14). These are
 implemented in the new `securecloud/` package and mapped in `PAPER_IMPLEMENTATION_MAPPING.md`.
+
+## 6. Addendum (later change): cloud provider
+
+This analysis describes the repository **before** implementation. Since then, the cloud backend
+has been changed from Dropbox (as in the paper) to **Supabase Storage** (Free plan, official
+`supabase` SDK, private bucket), because no Dropbox credentials were available. Dropbox is kept as
+an optional backend. Versioned storage with atomic activation and authorized dynamic updates
+(paper §VII future work) was added at the same time. See `PAPER_IMPLEMENTATION_MAPPING.md` §6 and
+`IMPLEMENTATION_LIMITATIONS.md` §1.1 and §4.

@@ -23,7 +23,7 @@ class FakeDropboxClient:
 
     def _md(self, path, data):
         h = dropbox_content_hash(data)
-        return SimpleNamespace(name=path.rsplit("/", 1)[1], size=len(data),
+        return SimpleNamespace(name=path.rsplit("/", 1)[1], path_display=path, size=len(data),
                                content_hash=("0" * 64 if self.corrupt_hash else h))
 
     def files_upload(self, data, path, mode=None):
@@ -49,10 +49,17 @@ class FakeDropboxClient:
             raise RuntimeError("path/not_found")
         return self._md(path, self.files[path]), SimpleNamespace(content=self.files[path])
 
-    def files_list_folder(self, folder):
-        names = [p.rsplit("/", 1)[1] for p in self.files if p.rsplit("/", 1)[0] == folder]
-        return SimpleNamespace(entries=[SimpleNamespace(name=n) for n in names],
-                               has_more=False, cursor=None)
+    def files_list_folder(self, folder, recursive=False):
+        entries = [self._md(p, d) for p, d in self.files.items()
+                   if p.startswith(folder + "/") and (recursive or "/" not in p[len(folder) + 1:])]
+        # real recursive listings also contain folder entries (FolderMetadata has no size)
+        entries.append(SimpleNamespace(name="sub", path_display=folder + "/sub"))
+        return SimpleNamespace(entries=entries, has_more=False, cursor=None)
+
+    def files_delete_v2(self, path):
+        if path not in self.files:
+            raise RuntimeError("path_lookup/not_found")
+        del self.files[path]
 
 
 class TestContentHash:
@@ -74,22 +81,35 @@ class TestLocalFolder:
         s.upload("a.aes", b"123")
         assert s.download("a.aes") == b"123" and s.list() == ["a.aes"]
 
-    @pytest.mark.parametrize("bad", ["", "../x", "a/b", "a\\b", ".."])
+    @pytest.mark.parametrize("bad", ["", "../x", "a/../b", "/abs", "a//b", "a\\b", ".."])
     def test_rejects_path_traversal(self, tmp_path, bad):
         with pytest.raises(StorageError):
             LocalFolderStorage(tmp_path).upload(bad, b"x")
 
     def test_missing(self, tmp_path):
-        with pytest.raises(StorageError):
+        with pytest.raises(storage.ObjectNotFound):
             LocalFolderStorage(tmp_path).download("nope")
+
+    def test_nested_keys_list_and_delete(self, tmp_path):
+        s = LocalFolderStorage(tmp_path)
+        s.upload("f.txt/v000001/f.txt.aes", b"1")
+        s.upload("f.txt/manifest.signed", b"2")
+        s.upload("g/x", b"3")
+        assert s.list() == ["f.txt/manifest.signed", "f.txt/v000001/f.txt.aes", "g/x"]
+        assert s.list("f.txt") == ["f.txt/manifest.signed", "f.txt/v000001/f.txt.aes"]
+        s.delete(["f.txt/v000001/f.txt.aes", "missing"])
+        assert s.list("f.txt") == ["f.txt/manifest.signed"]
 
 
 class TestDropboxCodePath:
     def test_upload_download_list(self):
         s = DropboxStorage("/RingCrypter", client=FakeDropboxClient())
         s.upload("x.aes", b"payload")
+        s.upload("d/v000001/y.aes", b"nested")
         assert s.download("x.aes") == b"payload"
-        assert s.list() == ["x.aes"]
+        assert s.list() == ["d/v000001/y.aes", "x.aes"]
+        s.delete(["x.aes"])
+        assert s.list() == ["d/v000001/y.aes"]
 
     def test_upload_confirmation_failure_raises(self):
         s = DropboxStorage("/RingCrypter", client=FakeDropboxClient(corrupt_hash=True))
@@ -110,13 +130,13 @@ class TestDropboxCodePath:
         from dropbox.files import ListFolderError, LookupError as DbxLookupError
 
         class Client(FakeDropboxClient):
-            def files_list_folder(self, folder):
+            def files_list_folder(self, folder, recursive=False):
                 raise ApiError("req", ListFolderError.path(DbxLookupError.not_found), "msg", "en")
 
         assert DropboxStorage("/new", client=Client()).list() == []
 
     def test_download_error_wrapped(self):
-        with pytest.raises(StorageError):
+        with pytest.raises(storage.ObjectNotFound):
             DropboxStorage(client=FakeDropboxClient()).download("missing.aes")
 
     def test_missing_credentials(self, monkeypatch):

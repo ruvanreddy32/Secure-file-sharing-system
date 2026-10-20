@@ -15,7 +15,7 @@
 |---|---|---|
 | Language / runtime | CPython 3.14.4 | Java 1.8 |
 | Crypto libraries | `cryptography` 50.0.2 (OpenSSL), numpy 2.4.4 | not stated |
-| Cloud SDK | `dropbox` 12.2.3 (**not used in these runs**; no network) | Dropbox Core SDK 2.0-beta, Jackson 2.6.1 |
+| Cloud SDK | `supabase` 2.33.0 / `dropbox` 12.2.3 (**not used in these runs**; no network) | Dropbox Core SDK 2.0-beta, Jackson 2.6.1 |
 | OS | Windows 11 (10.0.26200), AMD64 | Windows 7 Professional, 32-bit |
 | CPU / cores | Intel64 Family 6 Model 151 (12 logical CPUs) | Intel Core i3 @ 2.40 GHz |
 | RAM | not recorded | 4 GB |
@@ -113,12 +113,14 @@ Median of 30 runs, milliseconds.
    CSV). The jump in AES time between 500 and 750 KB (0.11 → 0.45 ms) appears in both modes and is
    consistent with a memory-allocation threshold in the runtime; it does not affect the conclusions.
 
-## 5. Network timings (Dropbox)
+## 5. Network timings (cloud storage)
 
-**Not measured**: no Dropbox credentials were available in this environment. With credentials,
-`python -m evaluation.paper_benchmark --dropbox` adds `net.upload_total_ms` and
-`net.download_total_ms` columns, measured against the real Dropbox API, to the same CSVs. That run
-is the closest match to the paper's likely measurement boundary.
+**Not measured**: no Supabase or Dropbox credentials were available in this environment. With
+credentials, `python -m evaluation.paper_benchmark --cloud supabase` (or `--cloud dropbox`) adds
+`net.upload_total_ms` and `net.download_total_ms` columns, measured against the real provider, to
+the same CSVs. Supabase upload time includes the read-back used to confirm each upload. Note that the
+paper's network component was Dropbox in 2017, so even then the numbers would not be directly
+comparable.
 
 ## 6. Ring-LWE decryption-failure study (supporting a design decision)
 
@@ -134,6 +136,6 @@ is the closest match to the paper's likely measurement boundary.
 ```bash
 python -m evaluation.paper_benchmark --runs 30 --warmup 3     # ~1 min, writes evaluation/results/
 python -m evaluation.paper_benchmark --plot-only              # redraw figures from the CSVs
-python -m evaluation.paper_benchmark --dropbox                # include real Dropbox transfers
+python -m evaluation.paper_benchmark --cloud supabase         # include real Supabase transfers
 python -m evaluation.rlwe_failure_rate --trials 3000
 ```

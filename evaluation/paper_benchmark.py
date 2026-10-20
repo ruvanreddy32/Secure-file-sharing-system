@@ -16,14 +16,16 @@ Measured per run (time.perf_counter, milliseconds):
     verify : rsa_verify, mht_parse, sha256_block_hashing, mht_construction, mht_compare,
              total_verify
     decrypt: rlwe_key_decrypt, aes_decrypt
-    (optional --dropbox) upload and download of the three files via the real Dropbox API
+    (optional --cloud supabase|dropbox) upload and download of the three files via the real
+    cloud API (each upload confirmed by the provider)
 
 Each configuration: WARMUP discarded runs, then RUNS timed runs; the median is reported
 (plus mean / std / min / max in the CSV).  Keys are generated once (timed separately).
 
 Usage:
     python -m evaluation.paper_benchmark                 # local (no network)
-    python -m evaluation.paper_benchmark --dropbox       # also time real Dropbox transfers
+    python -m evaluation.paper_benchmark --cloud supabase   # also time real Supabase transfers
+    python -m evaluation.paper_benchmark --cloud dropbox    # ... or real Dropbox transfers
     python -m evaluation.paper_benchmark --runs 50
 """
 
@@ -251,11 +253,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", type=int, default=30)
     ap.add_argument("--warmup", type=int, default=3)
-    ap.add_argument("--dropbox", action="store_true", help="also time real Dropbox upload/download")
+    ap.add_argument("--cloud", choices=["supabase", "dropbox"],
+                    help="also time real upload/download with this cloud backend")
+    ap.add_argument("--dropbox", action="store_true", help="alias for --cloud dropbox")
     ap.add_argument("--rlwe-params", default=rlwe.DEFAULT_PARAMS, choices=sorted(rlwe.PARAMS))
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--plot-only", action="store_true", help="re-draw figures from existing CSVs")
     args = ap.parse_args(argv)
+    from securecloud import envfile
+    envfile.load()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     outdir = Path(args.out)
@@ -266,10 +272,15 @@ def main(argv=None) -> int:
         return 0
 
     store = None
-    if args.dropbox:
+    cloud = "dropbox" if args.dropbox else args.cloud
+    if cloud == "dropbox":
         from securecloud.storage import DropboxStorage
         store = DropboxStorage(os.environ.get("DROPBOX_BENCH_FOLDER", "/RingCrypter-bench"))
         print("Dropbox account:", store.check_account())
+    elif cloud == "supabase":
+        from securecloud.storage import SupabaseStorage
+        store = SupabaseStorage(os.environ.get("SUPABASE_BENCH_BUCKET", "ringcrypter-bench"))
+        print("Supabase:", store.ensure_bucket(create=True))
 
     t0 = time.perf_counter()
     owner_rsa = signature.generate_keypair()
@@ -280,7 +291,7 @@ def main(argv=None) -> int:
     keys_ = (owner_rsa, recipient)
     env = environment()
     env.update({"runs": str(args.runs), "warmup": str(args.warmup), "rlwe_params": args.rlwe_params,
-                "rsa_bits": str(owner_rsa.key_size), "network": "dropbox" if store else "none (local)",
+                "rsa_bits": str(owner_rsa.key_size), "network": cloud or "none (local)",
                 "keygen_rsa3072_ms": f"{t_rsa:.1f}", "keygen_rlwe_ms": f"{t_rlwe:.2f}"})
     print(json.dumps(env, indent=2))
 

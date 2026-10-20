@@ -4,6 +4,21 @@ import pytest
 
 from securecloud import rlwe, signature, workflow
 
+_CLOUD_VARS = ("SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY",
+               "SUPABASE_BUCKET", "SUPABASE_TEST_BUCKET", "DROPBOX_ACCESS_TOKEN",
+               "DROPBOX_REFRESH_TOKEN", "DROPBOX_APP_KEY", "DROPBOX_APP_SECRET", "RINGCRYPTER_BACKEND")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_environment(request, monkeypatch):
+    """Unit tests never see real cloud credentials (from the shell or a .env file).
+    Tests marked supabase_live / dropbox_live are exempt."""
+    if request.node.get_closest_marker("supabase_live") or request.node.get_closest_marker("dropbox_live"):
+        return
+    monkeypatch.setenv("RINGCRYPTER_NO_DOTENV", "1")
+    for var in _CLOUD_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 @pytest.fixture(scope="session")
 def owner_rsa():
@@ -17,6 +32,11 @@ def attacker_rsa():
 
 @pytest.fixture(scope="session")
 def recipient_rlwe():
+    return rlwe.generate_keypair("P2")
+
+
+@pytest.fixture(scope="session")
+def owner_rlwe():
     return rlwe.generate_keypair("P2")
 
 

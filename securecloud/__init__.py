@@ -8,8 +8,9 @@ Modules:
     mht        – SHA-256 Merkle Hash Tree of the encrypted file + MHT file (§III-A, §V-C)
     signature  – RSA-PSS signing of the MHT file / signed MHT file (§III-C, §V-C)
     keys       – RSA and Ring-LWE identity generation and storage
-    storage    – Dropbox (official SDK) and local-folder backends (§IV, Fig. 2)
-    workflow   – Setup phase, integrity verification, gated decryption (§V-C)
+    storage    – Supabase Storage (default), Dropbox (optional) and local-folder backends (§IV, Fig. 2)
+    workflow   – Setup phase, integrity verification, gated decryption (§V-C), dynamic update
+    versioning – versioned storage: signed manifest, atomic activation, authorized updates
     cli        – "Ring Crypter" command-line tool (Fig. 4)
 """
 
