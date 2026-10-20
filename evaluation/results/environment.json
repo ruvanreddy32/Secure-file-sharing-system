@@ -1,0 +1,19 @@
+{
+  "timestamp_utc": "2026-10-20T08:43:23+00:00",
+  "python": "3.14.4",
+  "implementation": "CPython",
+  "os": "Windows 11 (10.0.26200)",
+  "machine": "AMD64",
+  "processor": "Intel64 Family 6 Model 151 Stepping 2, GenuineIntel",
+  "cpu_count": "12",
+  "cryptography": "50.0.2",
+  "numpy": "2.4.4",
+  "dropbox_sdk": "12.2.3",
+  "runs": "30",
+  "warmup": "3",
+  "rlwe_params": "P2",
+  "rsa_bits": "3072",
+  "network": "none (local)",
+  "keygen_rsa3072_ms": "53.4",
+  "keygen_rlwe_ms": "5.23"
+}

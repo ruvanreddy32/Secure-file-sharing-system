@@ -1,0 +1,10 @@
+streamlit>=1.35.0
+pyvis>=0.3.2
+pytest>=8.0.0
+# Ring Crypter / paper implementation
+cryptography>=42.0      # AES-256-GCM, RSA-PSS, scrypt
+numpy>=1.26             # Ring-LWE polynomial arithmetic
+dropbox>=12.0           # official Dropbox Python SDK
+matplotlib>=3.8         # performance graphs
+# optional (used only by tests to validate generated sample files):
+# pillow, pypdf

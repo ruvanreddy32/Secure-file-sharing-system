@@ -1,0 +1,26 @@
+[
+  {
+    "params": "P1",
+    "n": 256,
+    "q": 7681,
+    "trials": 3000,
+    "bits": 384000,
+    "single_bit_errors": 6,
+    "single_bit_error_rate": 1.5625e-05,
+    "single_256bit_key_failure_est": 0.003992041781572642,
+    "double_bit_errors": 0,
+    "double_ciphertext_failures": 0
+  },
+  {
+    "params": "P2",
+    "n": 512,
+    "q": 12289,
+    "trials": 3000,
+    "bits": 768000,
+    "single_bit_errors": 48,
+    "single_bit_error_rate": 6.25e-05,
+    "single_256bit_key_failure_est": 0.015873172028746718,
+    "double_bit_errors": 0,
+    "double_ciphertext_failures": 0
+  }
+]
