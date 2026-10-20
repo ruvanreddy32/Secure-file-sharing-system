@@ -13,7 +13,7 @@ from test_storage import FakeDropboxClient
 from securecloud import mht, signature, workflow
 from securecloud.storage import DropboxStorage, LocalFolderStorage, SupabaseStorage
 from securecloud.versioning import (Manifest, ManifestError, PublishError, VersionedRepository,
-                                    manifest_key, version_keys)
+                                    VersionTrustStore, manifest_key, version_keys)
 from securecloud.workflow import IntegrityError, decrypt_verified
 
 V1, V2, V3 = os.urandom(9000), os.urandom(12000), b"third version " * 500
@@ -249,14 +249,20 @@ class TestStorageAttacks:
         assert out is None and not report.ok
         assert not report.version_ok or report.manifest_valid is False
 
-    def test_manifest_rollback_detected_with_min_version(self, published, store, owner_rsa, recipient_rlwe):
+    def test_manifest_rollback_detected_with_min_version(self, published, store, owner_rsa, recipient_rlwe, tmp_path):
         old_manifest = store.download(manifest_key("doc.pdf"))
         published.update("doc.pdf", V2, owner_rsa, recipient_rlwe.public)
         store.upload(manifest_key("doc.pdf"), old_manifest)         # replay genuine old manifest
+        # Explicit min_version detects rollback:
         out, report = _open(published, owner_rsa, recipient_rlwe, min_version=2)
         assert out is None and "Rollback" in report.summary
-        out, report = _open(published, owner_rsa, recipient_rlwe)  # documented limitation
-        assert out == V1 and report.version == 1
+        # Persistent trust store ALSO detects rollback even without explicit min_version:
+        out, report = _open(published, owner_rsa, recipient_rlwe)
+        assert out is None and "Rollback" in report.summary
+        # TOFU limitation: a fresh client that has never seen version 2 accepts version 1 on first use:
+        fresh_repo = VersionedRepository(store, trust_store=VersionTrustStore(tmp_path / "fresh_trust.json"))
+        fresh_out, fresh_report = _open(fresh_repo, owner_rsa, recipient_rlwe)
+        assert fresh_out == V1 and fresh_report.version == 1
 
     def test_deleted_version_files(self, published, store, owner_rsa, recipient_rlwe):
         store.delete([_keys(published, owner_rsa, 1)["encrypted_key"]])

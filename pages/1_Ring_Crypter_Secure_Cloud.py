@@ -144,6 +144,41 @@ if "keys" not in ss:
     st.stop()
 K = ss["keys"]
 
+
+def _invalidate_verification(reason=None):
+    """Clear cached verification, downloaded bundle, and decrypted data."""
+    ss.pop("report", None)
+    ss.pop("dl", None)
+    ss.pop("dl_name", None)
+    ss.pop("dl_version", None)
+    ss.pop("plain", None)
+    if reason:
+        ss["stale_notice"] = reason
+
+
+if "shared_target_file" not in ss:
+    _init_names = _names()
+    ss["shared_target_file"] = _init_names[0] if _init_names else ""
+
+
+def _on_user_target_change():
+    sel = ss.get("user_target", "")
+    ss["shared_target_file"] = sel
+    ss["atk_target"] = sel
+    _invalidate_verification("Target file changed. Please run fresh verification.")
+
+
+def _on_atk_target_change():
+    sel = ss.get("atk_target", "")
+    ss["shared_target_file"] = sel
+    ss["user_target"] = sel
+    _invalidate_verification("Target file changed. Fresh verification is required.")
+
+
+def _on_user_version_change():
+    _invalidate_verification("Target version changed. Please run fresh verification.")
+
+
 owner_tab, user_tab, attack_tab = st.tabs(["1 · Owner: protect, upload & update",
                                            "2 · User: download, verify, decrypt",
                                            "3 · Attacker: tamper with the cloud copy"])
@@ -187,6 +222,7 @@ with owner_tab:
                 bundle = repo.download(target, repo.read_manifest(target, K["owner_pub"]).entry(entry.version))
             ss["bundle"], ss["setup_t"], ss["entry"] = bundle, t, entry
             ss["io"] = {**(stats or {}), **repo.storage.snapshot()}
+            _invalidate_verification("New version published. Run fresh verification.")
             st.success(f"Version {entry.version} ({entry.format}) uploaded (each upload confirmed) "
                        "and activated.")
         except (PublishError, workflow.IntegrityError, storage.StorageError, ValueError) as exc:
@@ -229,6 +265,7 @@ with owner_tab:
                 repo = _repo(counting=True)
                 entry, stats = repo.block_patch(bf, int(off), text.encode(), K["owner_rsa"], K["owner_rlwe"])
                 ss["blk_result"] = {"new version": entry.version, **stats, **repo.storage.snapshot()}
+                _invalidate_verification(f"File '{bf}' updated. Run fresh verification.")
                 st.success(f"'{bf}' → version {entry.version}: re-encrypted {stats['blocks_changed']} of "
                            f"{stats['blocks_total']} blocks; uploaded "
                            f"{repo.storage.ops['upload']} objects ({repo.storage.bytes_up:,} B).")
@@ -239,30 +276,38 @@ with owner_tab:
 
 # ── User ─────────────────────────────────────────────────────────────────────
 with user_tab:
+    if "stale_notice" in ss:
+        st.warning(ss.pop("stale_notice"))
     names = _names()
-    name = st.selectbox("Protected files in storage", names)
+    if ss.get("shared_target_file") not in names and names:
+        ss["shared_target_file"] = names[0]
+    idx_u = names.index(ss["shared_target_file"]) if ss.get("shared_target_file") in names else 0
+    name = st.selectbox("Protected files in storage", names, index=idx_u, key="user_target",
+                        on_change=_on_user_target_change)
     version = None
     if name:
         try:
             man, versions = _repo().versions(name, K["owner_pub"])
             opts = [f"v{e.version}" + (" (active)" if e.version == man.current_version else "")
                     + f" · {e.format}" for e in reversed(versions)]
-            version = int(st.selectbox("Version", opts).split()[0][1:])
+            version = int(st.selectbox("Version", opts, key="user_version",
+                                       on_change=_on_user_version_change).split()[0][1:])
         except storage.StorageError as exc:  # includes ManifestError
             st.error(f"Signed manifest problem: {exc}")
     if name and st.button("Download & verify integrity", type="primary"):
         bundle, report = _repo().fetch_verified(name, K["owner_pub"], version)
-        ss["dl"], ss["report"], ss["dl_name"] = bundle, report, name
+        ss["dl"], ss["report"], ss["dl_name"], ss["dl_version"] = bundle, report, name, version
         ss.pop("plain", None)
-    if "report" in ss and ss.get("dl_name") == name:
+    if "report" in ss and ss.get("dl_name") == name and ss.get("dl_version") == version:
         r = ss["report"]
         (st.success if r.ok else st.error)(r.summary)
-        c = st.columns(5)
+        c = st.columns(6)
         c[0].metric("Signed manifest", {True: "valid", False: "INVALID", None: "-"}[r.manifest_valid])
         c[1].metric("RSA signature", "valid" if r.signature_valid else "INVALID")
         c[2].metric("MHT comparison", "match" if r.mht_match else "MISMATCH")
-        c[3].metric("Version", f"{r.version}" + ("" if r.version_ok else " ✗"))
-        c[4].metric("Modified blocks", len(r.tampered_blocks))
+        c[3].metric("Encrypted Key", "MATCH" if r.key_file_match else "MISMATCH")
+        c[4].metric("Version", f"{r.version}" + ("" if r.version_ok else " ✗"))
+        c[5].metric("Modified blocks", len(r.tampered_blocks))
         if r.tampered_blocks:
             st.write("Modified block indices:", r.tampered_blocks[:200])
         st.write(f"stored root `{r.stored_root or '-'}`  \nrecomputed root `{r.computed_root or '-'}`")
@@ -274,14 +319,28 @@ with user_tab:
                 ss["plain"] = workflow.decrypt_verified(ss["dl"], r, K["user_rlwe"], r.timings_ms)
             except Exception as exc:  # noqa: BLE001 - shown to the user
                 st.error(f"Decryption failed: {exc}")
-        if "plain" in ss:
+        if "plain" in ss and r.ok:
             st.success(f"Decrypted {len(ss['plain']):,} bytes.")
             st.download_button(f"⬇ {name}", ss["plain"], file_name=name)
 
 # ── Attacker ─────────────────────────────────────────────────────────────────
 with attack_tab:
+    if "atk_notice" in ss:
+        st.warning(ss.pop("atk_notice"))
     st.write("Modify what is stored in the cloud, then re-run verification in tab 2.")
-    target_a = st.selectbox("Target", _names(), key="atk_target")
+    names_a = _names()
+    if ss.get("shared_target_file") not in names_a and names_a:
+        ss["shared_target_file"] = names_a[0]
+    idx_a = names_a.index(ss["shared_target_file"]) if ss.get("shared_target_file") in names_a else 0
+    target_a = st.selectbox("Target", names_a, index=idx_a, key="atk_target",
+                            on_change=_on_atk_target_change)
+    if target_a:
+        try:
+            _man = _repo().read_manifest(target_a, K["owner_pub"])
+            _cur = _man.entry(_man.current_version) if _man else None
+            st.info(f"Targeting: **{target_a}** · Active Version: **v{_cur.version if _cur else '?'}** · Format: **{_cur.format if _cur else '?'}**")
+        except Exception:
+            st.info(f"Targeting: **{target_a}**")
     attacks = ["Flip one byte of the active encrypted file",
                "Truncate the active encrypted file",
                "Modify a hash in the active MHT file",
@@ -367,7 +426,9 @@ with attack_tab:
                 a, b = s.download(ks["blocks"][0]), s.download(ks["blocks"][1])
                 s.upload(ks["blocks"][0], b)
                 s.upload(ks["blocks"][1], a)
-            st.warning(f"Applied: {attack} on {target_a}")
+            _invalidate_verification(f"Storage for '{target_a}' was modified by attack ({attack}). Verification invalidated; fresh verification required.")
+            ss["atk_notice"] = f"Applied: {attack} on {target_a}"
+            st.rerun()
         except Exception as exc:  # noqa: BLE001 - shown to the user
             st.error(f"Attack could not be applied: {exc}")
     if target_a:

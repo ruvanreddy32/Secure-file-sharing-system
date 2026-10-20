@@ -53,9 +53,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 from . import blockmode, mht, signature, workflow
@@ -148,14 +150,88 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+class VersionTrustStore:
+    """Persistent local reference for highest known/verified versions of files.
+
+    Protects against manifest rollback attacks where an attacker replaces manifest.signed
+    with an older, genuinely signed manifest.
+
+    Limitation / Trust On First Use (TOFU):
+    If no record exists for a file, the first verified manifest is accepted (trust-on-first-use)
+    and recorded as the baseline. Rollback protection cannot protect against rollbacks on first use
+    if the reader has never observed any version before and has no out-of-band version reference.
+    Furthermore, this local store assumes the attacker cannot modify the client's local trust store.
+    """
+
+    def __init__(self, path: Optional[Union[str, Path]] = None) -> None:
+        if path is not None:
+            self.path = Path(path)
+        elif os.environ.get("RINGCRYPTER_TRUST_STORE"):
+            self.path = Path(os.environ["RINGCRYPTER_TRUST_STORE"])
+        else:
+            self.path = Path("keys") / ".trusted_versions.json"
+
+    def get_trusted_version(self, name: str) -> Optional[int]:
+        data = self._load()
+        return data.get(name)
+
+    def record_version(self, name: str, version: int) -> None:
+        data = self._load()
+        current = data.get(name, 0)
+        if version > current:
+            data[name] = version
+            self._save(data)
+
+    def clear(self, name: Optional[str] = None) -> None:
+        if not self.path.exists():
+            return
+        if name is None:
+            try:
+                self.path.unlink()
+            except OSError:
+                pass
+        else:
+            data = self._load()
+            if name in data:
+                del data[name]
+                self._save(data)
+
+    def _load(self) -> Dict[str, int]:
+        if not self.path.exists():
+            return {}
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save(self, data: Dict[str, int]) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+
 class VersionedRepository:
     """Owner and receiver operations on versioned, integrity-protected files in a storage backend."""
 
-    def __init__(self, storage: Storage, max_workers: int = 8) -> None:
+    def __init__(self, storage: Storage, max_workers: int = 8,
+                 trust_store: Optional[VersionTrustStore] = None) -> None:
         self.storage = storage
         self.max_workers = max_workers   # parallel object transfers (block mode)
         self._pool: Optional[ThreadPoolExecutor] = None   # long-lived: keeps per-thread HTTP
                                                           # clients / TLS connections warm
+        if trust_store is not None:
+            self.trust_store: Optional[VersionTrustStore] = trust_store
+        elif os.environ.get("RINGCRYPTER_TRUST_STORE"):
+            self.trust_store = VersionTrustStore(os.environ["RINGCRYPTER_TRUST_STORE"])
+        elif hasattr(storage, "root"):
+            keys_dir = Path(storage.root).parent / "keys"
+            self.trust_store = VersionTrustStore(keys_dir / ".trusted_versions.json")
+        else:
+            self.trust_store = VersionTrustStore()
 
     # ------------------------------------------------------------------ manifest
     def read_manifest(self, name: str, owner_public_key) -> Optional[Manifest]:
@@ -231,6 +307,8 @@ class VersionedRepository:
         except Exception as exc:
             raise PublishError(f"Version {report.version} uploaded but the manifest could not be "
                                f"written ({exc}); it is NOT active (run cleanup)") from exc
+        if self.trust_store is not None:
+            self.trust_store.record_version(bundle.name, entry.version)
         return entry
 
     def update(self, name: str, new_plaintext: bytes, signing_key, recipient_rlwe_public,
@@ -258,6 +336,8 @@ class VersionedRepository:
             self.storage.delete([manifest_key(name)])     # deactivate first
             keys = self.storage.list(name)
             self.storage.delete(keys)
+            if self.trust_store is not None:
+                self.trust_store.clear(name)
             return [manifest_key(name)] + keys
         e = m.entry(version)
         if e is None or e.deleted:
@@ -342,12 +422,19 @@ class VersionedRepository:
         if m is None:
             fail.messages.append(f"'{name}' not found in {self.storage.name} storage")
             return None, fail
-        v = version or m.current_version
-        if min_version is not None and m.current_version < min_version:
+
+        trusted_v = self.trust_store.get_trusted_version(name) if self.trust_store else None
+        effective_min = min_version
+        if trusted_v is not None:
+            effective_min = max(effective_min or 0, trusted_v)
+
+        if effective_min is not None and m.current_version < effective_min:
             fail.manifest_valid = False
             fail.messages.append(f"Rollback detected: storage offers version {m.current_version}, "
-                                 f"but version {min_version} was seen before")
+                                 f"but version {effective_min} was seen before")
             return None, fail
+
+        v = version or m.current_version
         entry = m.entry(v)
         if entry is None or entry.deleted:
             fail.manifest_valid = True
@@ -377,6 +464,8 @@ class VersionedRepository:
             report.ok = False
         if not report.ok:
             report.verified_digest = ""   # decrypt_verified will refuse
+        elif self.trust_store is not None:
+            self.trust_store.record_version(name, m.current_version)
         return bundle, report
 
     # ------------------------------------------------------------------ helpers (all formats)
@@ -443,6 +532,8 @@ class VersionedRepository:
         except Exception as exc:
             raise PublishError(f"Version {entry.version} uploaded but the manifest could not be "
                                f"written ({exc}); it is NOT active (run cleanup)") from exc
+        if self.trust_store is not None:
+            self.trust_store.record_version(name, entry.version)
         return entry
 
     # ------------------------------------------------------------------ block mode (RCB1)
@@ -603,4 +694,6 @@ class VersionedRepository:
             report.version_ok = report.ok = False
         if not report.ok:
             report.verified_digest = ""
+        elif self.trust_store is not None:
+            self.trust_store.record_version(name, m.current_version)
         return bundle, report

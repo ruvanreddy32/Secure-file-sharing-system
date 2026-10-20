@@ -54,7 +54,7 @@ from merkle.tree import MerkleTree
 from merkle.updater import update_block as merkle_update_block
 
 from . import aes_cipher, mht, rlwe, signature
-from .workflow import IntegrityError, VerificationReport
+from .workflow import IntegrityError, VerificationReport, validate_file_name
 
 FORMAT = mht.FORMAT_BLOCK
 MAGIC = FORMAT.encode()
@@ -169,8 +169,7 @@ def _metadata(name: str, blocks: List[bytes], plaintext_size: int, levels, encry
 def block_setup_phase(plaintext: bytes, name: str, signing_key, recipient_rlwe_public,
                       owner_rlwe_public) -> Tuple[BlockBundle, Dict[str, float]]:
     """Setup phase for an RCB1 file (version 1).  Returns (bundle, timings in ms)."""
-    if not name or "/" in name or "\\" in name:
-        raise ValueError(f"Invalid file name {name!r}")
+    validate_file_name(name)
     t: Dict[str, float] = {}
     t_all = t0 = time.perf_counter()
     key, file_id = aes_cipher.generate_file_key(), os.urandom(16)

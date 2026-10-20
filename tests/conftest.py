@@ -10,9 +10,10 @@ _CLOUD_VARS = ("SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_environment(request, monkeypatch):
+def _hermetic_environment(request, monkeypatch, tmp_path):
     """Unit tests never see real cloud credentials (from the shell or a .env file).
     Tests marked supabase_live / dropbox_live are exempt."""
+    monkeypatch.setenv("RINGCRYPTER_TRUST_STORE", str(tmp_path / "trust" / ".trusted_versions.json"))
     if request.node.get_closest_marker("supabase_live") or request.node.get_closest_marker("dropbox_live"):
         return
     monkeypatch.setenv("RINGCRYPTER_NO_DOTENV", "1")

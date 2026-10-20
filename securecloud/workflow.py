@@ -118,13 +118,39 @@ def _ms(t0: float) -> float:
 # Owner side: Initialization + Setup phase
 # ---------------------------------------------------------------------------
 
+WINDOWS_RESERVED = frozenset({
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+})
+
+
+def validate_file_name(name: str) -> None:
+    """Validate that *name* is a valid, safe file name.
+
+    Rejects empty names, directory separators (/ and \\), path traversal ('.', '..'),
+    Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9 with any extension),
+    and trailing spaces or dots.
+    """
+    if not name or not isinstance(name, str):
+        raise ValueError(f"Invalid file name: {name!r} (must be a non-empty string)")
+    if "/" in name or "\\" in name:
+        raise ValueError(f"Invalid file name {name!r}: directory separators are not permitted")
+    if name in (".", "..") or name.startswith(".."):
+        raise ValueError(f"Invalid file name {name!r}: path traversal is not permitted")
+    stem = name.split(".")[0].lower().strip()
+    if stem in WINDOWS_RESERVED:
+        raise ValueError(f"Invalid file name {name!r}: '{stem.upper()}' is a reserved Windows system device name")
+    if name.endswith(" ") or name.endswith("."):
+        raise ValueError(f"Invalid file name {name!r}: trailing dots or spaces are not permitted")
+
+
 def setup_phase(plaintext: bytes, name: str, signing_key, recipient_rlwe_public: rlwe.RLWEPublicKey,
                 *, block_size: Optional[int] = None, paper_mode: bool = False,
                 version: int = 1, previous_mht_sha256: str = ""
                 ) -> Tuple[ProtectedBundle, Dict[str, float]]:
     """Encrypt, encrypt the key, build and sign the MHT.  Returns (bundle, timings in ms)."""
-    if not name or "/" in name or "\\" in name:
-        raise ValueError(f"Invalid file name {name!r}")
+    validate_file_name(name)
     t: Dict[str, float] = {}
     t_all = time.perf_counter()
 

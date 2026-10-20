@@ -150,7 +150,20 @@ def test_cli_rollback_and_cleanup_local(keydir, tmp_path):
     manifest.write_bytes(old)                                         # replay old manifest
     pub = ["--signer-pub", str(keydir / "owner_rsa_public.pem")]
     assert main(["verify", "a.txt", *pub, *cloud, "--min-version", "2"]) == 2
-    assert main(["verify", "a.txt", *pub, *cloud]) == 0               # v1 still genuine
+    # Persistent rollback protection rejects rollback even without --min-version:
+    assert main(["verify", "a.txt", *pub, *cloud]) == 2
+    # Fresh trust store without prior knowledge accepts v1 (first-use trust limitation):
+    fresh_trust = tmp_path / "fresh_cli_trust.json"
+    import os
+    orig_trust = os.environ.get("RINGCRYPTER_TRUST_STORE")
+    os.environ["RINGCRYPTER_TRUST_STORE"] = str(fresh_trust)
+    try:
+        assert main(["verify", "a.txt", *pub, *cloud]) == 0
+    finally:
+        if orig_trust is not None:
+            os.environ["RINGCRYPTER_TRUST_STORE"] = orig_trust
+        else:
+            os.environ.pop("RINGCRYPTER_TRUST_STORE", None)
     assert main(["cleanup", "a.txt", *pub, *cloud]) == 0              # v2 now unreferenced
     assert not any("v000002" in p.as_posix() for p in (tmp_path / "cloud").rglob("*"))
 

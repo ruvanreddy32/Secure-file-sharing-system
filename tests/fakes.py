@@ -15,7 +15,16 @@ import uuid
 from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional
 
-from storage3.exceptions import StorageApiError
+try:
+    from storage3.exceptions import StorageApiError
+except ImportError:
+    class StorageApiError(Exception):  # type: ignore[no-redef]
+        """Fallback mock exception when storage3/supabase is not installed."""
+        def __init__(self, message: str = "", error: Optional[str] = None, status: Optional[int] = 400) -> None:
+            super().__init__(message)
+            self.message = message
+            self.error = error
+            self.status = status
 
 
 class FakeBucketApi:

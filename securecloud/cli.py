@@ -148,6 +148,12 @@ def cmd_encrypt(args) -> int:
 
 
 def cmd_upload(args) -> int:
+    if getattr(args, "block_mode", False) and getattr(args, "paper_mode", False):
+        print("error: --paper-mode (2 blocks / 3-node tree) cannot be used with --block-mode (per-block 4096-byte encryption)", file=sys.stderr)
+        return 1
+    if getattr(args, "block_mode", False) and getattr(args, "block_size", None):
+        print("error: --block-size cannot be customized with --block-mode (fixed at 4096 bytes)", file=sys.stderr)
+        return 1
     if args.block_mode:
         if not args.owner_rlwe_pub:
             print("error: --block-mode needs --owner-rlwe-pub (owner's Ring-LWE public key)", file=sys.stderr)
