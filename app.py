@@ -284,6 +284,40 @@ st.markdown(
     div[data-testid="stNumberInput"] label,
     div[data-testid="stSelectbox"] label,
     div[data-testid="stTextInput"] label { font-size: 0.78rem !important; color: #8b949e !important; }
+
+    /* ── Number input +/- stepper buttons fix ── */
+    /* Reset both stepper buttons to identical neutral style,
+       overriding any accidental primary-button colour bleed */
+    [data-testid="stNumberInput"] button {
+        background: #21262d !important;
+        border: 1px solid #30363d !important;
+        color: #c9d1d9 !important;
+        border-radius: 6px !important;
+        box-shadow: none !important;
+        cursor: pointer !important;
+        transition: background 0.15s ease, border-color 0.15s ease !important;
+    }
+    [data-testid="stNumberInput"] button:hover {
+        background: #30363d !important;
+        border-color: #58a6ff !important;
+        color: #e6edf3 !important;
+    }
+    [data-testid="stNumberInput"] button:disabled {
+        opacity: 0.35 !important;
+        cursor: not-allowed !important;
+    }
+    /* Also style the number input text field */
+    [data-testid="stNumberInput"] input {
+        background: #161b22 !important;
+        border: 1px solid #30363d !important;
+        color: #e6edf3 !important;
+        font-family: "JetBrains Mono", monospace !important;
+        font-size: 0.85rem !important;
+    }
+    [data-testid="stNumberInput"] input:focus {
+        border-color: #58a6ff !important;
+        box-shadow: 0 0 0 2px rgba(88,166,255,0.15) !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -686,14 +720,19 @@ with st.sidebar:
         '<div class="sb-section"><span class="icon">tune</span>Configuration</div>',
         unsafe_allow_html=True,
     )
-    block_size_input = st.number_input(
+    # Use a key so Streamlit owns the widget state; initialise once from session_state.
+    # Do NOT pass value= on every run or +/- buttons fight the externally-written value.
+    if "block_size_input" not in st.session_state:
+        st.session_state["block_size_input"] = st.session_state.block_size
+    st.number_input(
         "Block size (bytes)", min_value=16, max_value=65536,
-        value=st.session_state.block_size, step=512,
+        step=512, key="block_size_input",
     )
-    st.session_state.block_size = block_size_input
+    # Keep block_size in sync (block_size_input is the live value)
+    st.session_state.block_size = st.session_state["block_size_input"]
 
     if st.session_state.file_data:
-        n_preview = math.ceil(st.session_state.file_size / block_size_input)
+        n_preview = math.ceil(st.session_state.file_size / st.session_state["block_size_input"])
         st.caption(f"→ {n_preview} blocks, tree height {math.ceil(math.log2(max(n_preview, 2)))}")
 
     # ── Build Tree button ──
