@@ -30,7 +30,7 @@ coverage.xml
 
 
 # Streamlit cache
-.streamlit/
+.streamlit/secrets.toml
 
 # IDE
 .vscode/
